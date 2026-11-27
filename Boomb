@@ -1,0 +1,1022 @@
+-- AX HUB • BOMB (Fixed & Clean - Single AX Toggle)
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ==========================================
+-- 1. CENTRAL CONFIGURATION & DEFAULTS
+-- ==========================================
+local Defaults = {
+	AutoEscape = false,
+	EscapeDistance = 28,
+	PassToNearest = false,
+	AutoEquipBomb = false,
+
+	SuperSpeed = false,
+	WalkSpeed = 36,
+	HighJump = false,
+	JumpPower = 85,
+	Noclip = false,
+	InfiniteJump = false,
+
+	BombESP = true,
+	PlayerESP = false,
+
+	ThemeName = "أحمر كلاسيكي",
+	AntiAFK = true,
+
+	PageVisible = true
+}
+
+local Config = {}
+for k, v in pairs(Defaults) do
+	Config[k] = v
+end
+
+local Themes = {
+	["أحمر كلاسيكي"] = {
+		WindowBg = Color3.fromRGB(16, 16, 19),
+		SidebarBg = Color3.fromRGB(19, 19, 23),
+		RowBg = Color3.fromRGB(27, 27, 32),
+		Accent = Color3.fromRGB(215, 28, 44),
+		White = Color3.fromRGB(248, 248, 252),
+		Muted = Color3.fromRGB(145, 145, 160),
+		Border = Color3.fromRGB(40, 40, 48),
+		KnobOff = Color3.fromRGB(235, 235, 242),
+		TrackOff = Color3.fromRGB(48, 48, 58)
+	},
+	["أسود داكن"] = {
+		WindowBg = Color3.fromRGB(11, 11, 13),
+		SidebarBg = Color3.fromRGB(14, 14, 17),
+		RowBg = Color3.fromRGB(22, 22, 26),
+		Accent = Color3.fromRGB(185, 24, 38),
+		White = Color3.fromRGB(245, 245, 250),
+		Muted = Color3.fromRGB(135, 135, 150),
+		Border = Color3.fromRGB(34, 34, 42),
+		KnobOff = Color3.fromRGB(220, 220, 230),
+		TrackOff = Color3.fromRGB(42, 42, 50)
+	},
+	["قرمزي مشرق"] = {
+		WindowBg = Color3.fromRGB(20, 16, 18),
+		SidebarBg = Color3.fromRGB(24, 19, 22),
+		RowBg = Color3.fromRGB(32, 26, 30),
+		Accent = Color3.fromRGB(235, 38, 62),
+		White = Color3.fromRGB(252, 248, 250),
+		Muted = Color3.fromRGB(160, 145, 152),
+		Border = Color3.fromRGB(48, 38, 44),
+		KnobOff = Color3.fromRGB(240, 235, 238),
+		TrackOff = Color3.fromRGB(56, 46, 52)
+	}
+}
+
+local BombKeywords = { "bomb", "tnt", "explosive", "c4", "fuse", "dynamite" }
+
+-- ==========================================
+-- 2. STATE & CORE HELPERS
+-- ==========================================
+local State = {
+	BombCarrier = nil,
+	BombObject = nil,
+	LastNotifiedCarrier = nil,
+	SafeCFrame = nil,
+	BombHighlights = {},
+	PlayerHighlights = {},
+	AllRows = {},
+	SyncCallbacks = {},
+	ThemeMenuHolder = nil
+}
+
+local function getChar(plr)
+	return plr and plr.Character
+end
+
+local function getRoot(plr)
+	local c = getChar(plr)
+	return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHum(plr)
+	local c = getChar(plr)
+	return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function isBombName(name)
+	if not name then return false end
+	local low = string.lower(name)
+	for _, word in ipairs(BombKeywords) do
+		if string.find(low, word, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function isBombItem(obj)
+	if not obj then return false end
+	if obj:GetAttribute("IsBomb") == true or obj:GetAttribute("Bomb") == true or obj:GetAttribute("HasBomb") == true then
+		return true
+	end
+	if isBombName(obj.Name) then
+		return true
+	end
+	for _, d in ipairs(obj:GetDescendants()) do
+		if d:IsA("BoolValue") and isBombName(d.Name) and d.Value == true then
+			return true
+		end
+	end
+	return false
+end
+
+local function getTheme()
+	return Themes[Config.ThemeName] or Themes["أحمر كلاسيكي"]
+end
+
+-- ==========================================
+-- 3. BOMB SCAN, ESP & ALERT CARDS
+-- ==========================================
+local AlertContainer
+
+local function pushBombAlert(text)
+	if not AlertContainer then return end
+	local th = getTheme()
+
+	local card = Instance.new("Frame")
+	card.Size = UDim2.new(1, 0, 0, 44)
+	card.BackgroundColor3 = th.WindowBg
+	card.BorderSizePixel = 0
+	card.Parent = AlertContainer
+	Instance.new("UICorner", card).CornerRadius = UDim.new(0, 6)
+
+	local stroke = Instance.new("UIStroke", card)
+	stroke.Color = th.Accent
+	stroke.Thickness = 1.2
+
+	local redBar = Instance.new("Frame")
+	redBar.Size = UDim2.new(0, 4, 1, -10)
+	redBar.Position = UDim2.new(1, -9, 0, 5)
+	redBar.BackgroundColor3 = th.Accent
+	redBar.BorderSizePixel = 0
+	redBar.Parent = card
+	Instance.new("UICorner", redBar).CornerRadius = UDim.new(1, 0)
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, -20, 0, 16)
+	title.Position = UDim2.new(0, 8, 0, 4)
+	title.BackgroundTransparency = 1
+	title.Text = "تنبيه القنبلة"
+	title.TextColor3 = th.Accent
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 10
+	title.TextXAlignment = Enum.TextXAlignment.Right
+	title.Parent = card
+
+	local body = Instance.new("TextLabel")
+	body.Size = UDim2.new(1, -20, 0, 18)
+	body.Position = UDim2.new(0, 8, 0, 20)
+	body.BackgroundTransparency = 1
+	body.Text = text
+	body.TextColor3 = th.White
+	body.Font = Enum.Font.GothamSemibold
+	body.TextSize = 11
+	body.TextXAlignment = Enum.TextXAlignment.Right
+	body.Parent = card
+
+	task.delay(4.5, function()
+		if card and card.Parent then
+			card:Destroy()
+		end
+	end)
+end
+
+local function clearMap(tbl)
+	for k, hl in pairs(tbl) do
+		if hl then pcall(function() hl:Destroy() end) end
+		tbl[k] = nil
+	end
+end
+
+local function makeHighlight(adornee, name, fillColor, outlineColor)
+	if not adornee then return nil end
+	local hl = Instance.new("Highlight")
+	hl.Name = name
+	hl.FillColor = fillColor
+	hl.OutlineColor = outlineColor
+	hl.FillTransparency = 0.42
+	hl.OutlineTransparency = 0
+	hl.Adornee = adornee
+	hl.Parent = workspace
+	return hl
+end
+
+local function scanBomb()
+	local carrier, bombObj = nil, nil
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		local c = getChar(plr)
+		if c then
+			for _, item in ipairs(c:GetChildren()) do
+				if (item:IsA("Tool") or item:IsA("BasePart") or item:IsA("Model")) and isBombItem(item) then
+					carrier = plr
+					bombObj = item
+					break
+				end
+			end
+		end
+		if not carrier then
+			local bp = plr:FindFirstChild("Backpack")
+			if bp then
+				for _, item in ipairs(bp:GetChildren()) do
+					if item:IsA("Tool") and isBombItem(item) then
+						carrier = plr
+						bombObj = item
+						break
+					end
+				end
+			end
+		end
+		if carrier then break end
+	end
+
+	if not bombObj then
+		for _, desc in ipairs(workspace:GetDescendants()) do
+			if (desc:IsA("Tool") or desc:IsA("BasePart") or desc:IsA("Model")) and isBombItem(desc) then
+				bombObj = desc
+				break
+			end
+		end
+	end
+
+	State.BombCarrier = carrier
+	State.BombObject = bombObj
+
+	if carrier and carrier ~= State.LastNotifiedCarrier then
+		State.LastNotifiedCarrier = carrier
+		pushBombAlert("القنبلة الآن مع: " .. carrier.Name)
+	elseif not carrier then
+		State.LastNotifiedCarrier = nil
+	end
+end
+
+local function updateESP()
+	scanBomb()
+	local th = getTheme()
+
+	clearMap(State.BombHighlights)
+	if Config.BombESP then
+		local target = (State.BombCarrier and getChar(State.BombCarrier)) or State.BombObject
+		if target then
+			State.BombHighlights[target] = makeHighlight(target, "AX_BombESP", th.Accent, th.White)
+		end
+	end
+
+	clearMap(State.PlayerHighlights)
+	if Config.PlayerESP then
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= LocalPlayer and plr ~= State.BombCarrier then
+				local char = getChar(plr)
+				local hum = getHum(plr)
+				if char and hum and hum.Health > 0 then
+					State.PlayerHighlights[plr] = makeHighlight(char, "AX_PlayerESP", th.White, th.Accent)
+				end
+			end
+		end
+	end
+end
+
+-- ==========================================
+-- 4. BOMB & MOVEMENT ACTIONS
+-- ==========================================
+local function getBombPosition()
+	if State.BombCarrier then
+		local r = getRoot(State.BombCarrier)
+		if r then return r.Position end
+	end
+	if State.BombObject then
+		if State.BombObject:IsA("BasePart") then
+			return State.BombObject.Position
+		elseif State.BombObject:IsA("Model") then
+			if State.BombObject.PrimaryPart then
+				return State.BombObject.PrimaryPart.Position
+			end
+			local p = State.BombObject:FindFirstChildWhichIsA("BasePart", true)
+			if p then return p.Position end
+		end
+	end
+	return nil
+end
+
+local function findNearestPlayer()
+	local myRoot = getRoot(LocalPlayer)
+	if not myRoot then return nil end
+
+	local bestPlr, bestDist = nil, math.huge
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer then
+			local r = getRoot(plr)
+			local h = getHum(plr)
+			if r and h and h.Health > 0 then
+				local d = (r.Position - myRoot.Position).Magnitude
+				if d < bestDist then
+					bestDist = d
+					bestPlr = plr
+				end
+			end
+		end
+	end
+	return bestPlr
+end
+
+local function equipBombTool()
+	local char = getChar(LocalPlayer)
+	local hum = getHum(LocalPlayer)
+	local bp = LocalPlayer:FindFirstChild("Backpack")
+	if not char or not hum or not bp then return end
+
+	for _, tool in ipairs(bp:GetChildren()) do
+		if tool:IsA("Tool") and isBombItem(tool) then
+			hum:EquipTool(tool)
+			break
+		end
+	end
+end
+
+local function teleportToBombCarrier()
+	local myRoot = getRoot(LocalPlayer)
+	if not myRoot then return end
+	local carrierRoot = State.BombCarrier and getRoot(State.BombCarrier)
+	if carrierRoot then
+		myRoot.CFrame = carrierRoot.CFrame * CFrame.new(0, 0, 3)
+	else
+		local bPos = getBombPosition()
+		if bPos then
+			myRoot.CFrame = CFrame.new(bPos + Vector3.new(0, 2, 0))
+		end
+	end
+end
+
+local function saveSafeSpot()
+	local myRoot = getRoot(LocalPlayer)
+	if myRoot then
+		State.SafeCFrame = myRoot.CFrame
+		pushBombAlert("تم حفظ نقطة الأمان (Safe Spot)")
+	end
+end
+
+local function stepMovementAndBomb()
+	local myRoot = getRoot(LocalPlayer)
+	local myHum = getHum(LocalPlayer)
+	if not myRoot or not myHum or myHum.Health <= 0 then return end
+
+	myHum.WalkSpeed = Config.SuperSpeed and Config.WalkSpeed or 16
+	myHum.UseJumpPower = true
+	myHum.JumpPower = Config.HighJump and Config.JumpPower or 50
+
+	if Config.AutoEquipBomb and State.BombCarrier == LocalPlayer then
+		equipBombTool()
+	end
+
+	if Config.PassToNearest and State.BombCarrier == LocalPlayer then
+		equipBombTool()
+		local nearest = findNearestPlayer()
+		local nRoot = nearest and getRoot(nearest)
+		if nRoot then
+			myHum:MoveTo(Vector3.new(nRoot.Position.X, myRoot.Position.Y, nRoot.Position.Z))
+			return
+		end
+	end
+
+	if Config.AutoEscape and State.BombCarrier ~= LocalPlayer then
+		local bombPos = getBombPosition()
+		if bombPos then
+			local dist = (myRoot.Position - bombPos).Magnitude
+			if dist <= Config.EscapeDistance then
+				local dir = myRoot.Position - bombPos
+				if dir.Magnitude < 0.1 then
+					dir = Vector3.new(1, 0, 0)
+				end
+				local fleePos = myRoot.Position + dir.Unit * (Config.EscapeDistance + 10)
+				myHum:MoveTo(Vector3.new(fleePos.X, myRoot.Position.Y, fleePos.Z))
+			end
+		end
+	end
+end
+
+RunService.Stepped:Connect(function()
+	if Config.Noclip then
+		local char = getChar(LocalPlayer)
+		if char then
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") then
+					part.CanCollide = false
+				end
+			end
+		end
+	end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+	if Config.InfiniteJump then
+		local hum = getHum(LocalPlayer)
+		if hum then
+			hum:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
+	end
+end)
+
+LocalPlayer.Idled:Connect(function()
+	if Config.AntiAFK then
+		pcall(function()
+			VirtualUser:CaptureController()
+			VirtualUser:ClickButton2(Vector2.new())
+		end)
+	end
+end)
+
+-- ==========================================
+-- 5. UI BUILDER (SINGLE AX TOGGLE BUTTON)
+-- ==========================================
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+local oldGui = playerGui:FindFirstChild("AX_BombHub_ExactUI")
+if oldGui then oldGui:Destroy() end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AX_BombHub_ExactUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = playerGui
+
+local function makeDraggable(frame)
+	local dragging, dragInput, dragStart, startPos
+	frame.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = frame.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+	frame.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if input == dragInput and dragging then
+			local delta = input.Position - dragStart
+			frame.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + delta.X,
+				startPos.Y.Scale, startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+end
+
+-- زر AX واحد يبدّل بين إظهار الصفحة وإخفائها
+local AXToggleBtn = Instance.new("TextButton")
+AXToggleBtn.Name = "AX_SingleToggleButton"
+AXToggleBtn.Size = UDim2.new(0, 44, 0, 44)
+AXToggleBtn.Position = UDim2.new(0, 14, 0, 62)
+AXToggleBtn.BackgroundColor3 = getTheme().Accent
+AXToggleBtn.TextColor3 = getTheme().White
+AXToggleBtn.Font = Enum.Font.GothamBlack
+AXToggleBtn.TextSize = 15
+AXToggleBtn.Text = "AX"
+AXToggleBtn.Active = true
+AXToggleBtn.Parent = ScreenGui
+Instance.new("UICorner", AXToggleBtn).CornerRadius = UDim.new(1, 0)
+makeDraggable(AXToggleBtn)
+
+local MainWindow = Instance.new("Frame")
+MainWindow.Name = "MainWindow"
+MainWindow.Size = UDim2.new(0, 650, 0, 310)
+MainWindow.Position = UDim2.new(0.5, -325, 0.52, -155)
+MainWindow.BackgroundColor3 = getTheme().WindowBg
+MainWindow.Visible = Config.PageVisible
+MainWindow.Active = true
+MainWindow.Parent = ScreenGui
+Instance.new("UICorner", MainWindow).CornerRadius = UDim.new(0, 8)
+
+local winStroke = Instance.new("UIStroke", MainWindow)
+winStroke.Color = getTheme().Accent
+winStroke.Thickness = 1.2
+makeDraggable(MainWindow)
+
+local function setPageVisibility(vis)
+	Config.PageVisible = vis
+	MainWindow.Visible = vis
+end
+
+AXToggleBtn.MouseButton1Click:Connect(function()
+	setPageVisibility(not Config.PageVisible)
+end)
+
+-- حاوية بطاقات التنبيه أسفل يمين الشاشة
+AlertContainer = Instance.new("Frame")
+AlertContainer.Name = "BombAlerts"
+AlertContainer.Size = UDim2.new(0, 220, 0, 120)
+AlertContainer.Position = UDim2.new(1, -234, 1, -142)
+AlertContainer.BackgroundTransparency = 1
+AlertContainer.Parent = ScreenGui
+
+local alertLayout = Instance.new("UIListLayout", AlertContainer)
+alertLayout.Padding = UDim.new(0, 6)
+alertLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+
+-- الشريط العلوي
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, 0, 0, 38)
+TopBar.BackgroundColor3 = getTheme().SidebarBg
+TopBar.BorderSizePixel = 0
+TopBar.Parent = MainWindow
+Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 8)
+
+local TitleLbl = Instance.new("TextLabel")
+TitleLbl.Size = UDim2.new(0, 160, 1, 0)
+TitleLbl.Position = UDim2.new(0, 14, 0, 0)
+TitleLbl.BackgroundTransparency = 1
+TitleLbl.Text = "AX HUB • BOMB"
+TitleLbl.TextColor3 = getTheme().Accent
+TitleLbl.Font = Enum.Font.GothamBlack
+TitleLbl.TextSize = 13
+TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+TitleLbl.Parent = TopBar
+
+local SearchBox = Instance.new("TextBox")
+SearchBox.Size = UDim2.new(0, 185, 0, 26)
+SearchBox.Position = UDim2.new(1, -262, 0.5, -13)
+SearchBox.BackgroundColor3 = getTheme().RowBg
+SearchBox.TextColor3 = getTheme().White
+SearchBox.PlaceholderText = "بحث سريع..."
+SearchBox.PlaceholderColor3 = getTheme().Muted
+SearchBox.Text = ""
+SearchBox.Font = Enum.Font.GothamMedium
+SearchBox.TextSize = 11
+SearchBox.ClearTextOnFocus = false
+SearchBox.Parent = TopBar
+Instance.new("UICorner", SearchBox).CornerRadius = UDim.new(0, 5)
+
+local MinBtn = Instance.new("TextButton")
+MinBtn.Size = UDim2.new(0, 28, 0, 26)
+MinBtn.Position = UDim2.new(1, -68, 0.5, -13)
+MinBtn.BackgroundColor3 = getTheme().RowBg
+MinBtn.TextColor3 = getTheme().White
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 14
+MinBtn.Text = "-"
+MinBtn.Parent = TopBar
+Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 5)
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 28, 0, 26)
+CloseBtn.Position = UDim2.new(1, -34, 0.5, -13)
+CloseBtn.BackgroundColor3 = getTheme().Accent
+CloseBtn.TextColor3 = getTheme().White
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 12
+CloseBtn.Text = "X"
+CloseBtn.Parent = TopBar
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 5)
+
+MinBtn.MouseButton1Click:Connect(function()
+	setPageVisibility(false)
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+	clearMap(State.BombHighlights)
+	clearMap(State.PlayerHighlights)
+	ScreenGui:Destroy()
+end)
+
+-- القائمة الجانبية على اليسار
+local Sidebar = Instance.new("Frame")
+Sidebar.Size = UDim2.new(0, 148, 1, -48)
+Sidebar.Position = UDim2.new(0, 10, 0, 42)
+Sidebar.BackgroundColor3 = getTheme().SidebarBg
+Sidebar.BorderSizePixel = 0
+Sidebar.Parent = MainWindow
+Instance.new("UICorner", Sidebar).CornerRadius = UDim.new(0, 7)
+
+local sideLayout = Instance.new("UIListLayout", Sidebar)
+sideLayout.Padding = UDim.new(0, 7)
+local sidePad = Instance.new("UIPadding", Sidebar)
+sidePad.PaddingTop = UDim.new(0, 8)
+sidePad.PaddingLeft = UDim.new(0, 8)
+sidePad.PaddingRight = UDim.new(0, 8)
+
+-- منطقة المحتوى اليمنى
+local ContentScroller = Instance.new("ScrollingFrame")
+ContentScroller.Size = UDim2.new(1, -172, 1, -48)
+ContentScroller.Position = UDim2.new(0, 164, 0, 42)
+ContentScroller.BackgroundTransparency = 1
+ContentScroller.ScrollBarThickness = 3
+ContentScroller.CanvasSize = UDim2.new(0, 0, 0, 0)
+ContentScroller.AutomaticCanvasSize = Enum.AutomaticSize.Y
+ContentScroller.Parent = MainWindow
+
+local tabButtons = {}
+local tabPages = {}
+local activeTab = nil
+
+local function createTab(name, icon, order)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, 0, 0, 38)
+	btn.LayoutOrder = order
+	btn.BackgroundColor3 = getTheme().RowBg
+	btn.TextColor3 = getTheme().White
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 12
+	btn.Text = icon .. " " .. name
+	btn.AutoButtonColor = false
+	btn.Parent = Sidebar
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+	local page = Instance.new("Frame")
+	page.Size = UDim2.new(1, -4, 0, 0)
+	page.AutomaticSize = Enum.AutomaticSize.Y
+	page.BackgroundTransparency = 1
+	page.Visible = false
+	page.Parent = ContentScroller
+
+	local layout = Instance.new("UIListLayout", page)
+	layout.Padding = UDim.new(0, 7)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+	tabButtons[name] = btn
+	tabPages[name] = page
+
+	btn.MouseButton1Click:Connect(function()
+		activeTab = name
+		local th = getTheme()
+		for n, p in pairs(tabPages) do
+			p.Visible = (n == name)
+		end
+		for n, b in pairs(tabButtons) do
+			b.BackgroundColor3 = (n == name) and th.Accent or th.RowBg
+		end
+	end)
+
+	return page
+end
+
+local function addToggleRow(parent, labelText, order, getter, setter)
+	local th = getTheme()
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 40)
+	row.LayoutOrder = order
+	row.BackgroundColor3 = th.RowBg
+	row.Parent = parent
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(1, -80, 1, 0)
+	lbl.Position = UDim2.new(0, 12, 0, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = labelText
+	lbl.TextColor3 = th.White
+	lbl.Font = Enum.Font.GothamSemibold
+	lbl.TextSize = 11
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.Parent = row
+
+	local track = Instance.new("TextButton")
+	track.Size = UDim2.new(0, 44, 0, 22)
+	track.Position = UDim2.new(1, -56, 0.5, -11)
+	track.Text = ""
+	track.AutoButtonColor = false
+	track.Parent = row
+	Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+	local knob = Instance.new("Frame")
+	knob.Size = UDim2.new(0, 16, 0, 16)
+	knob.Parent = track
+	Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+	local function refresh(instant)
+		local curTh = getTheme()
+		local on = getter()
+		row.BackgroundColor3 = curTh.RowBg
+		local tGoal = on and curTh.Accent or curTh.TrackOff
+		local kGoal = on and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+		knob.BackgroundColor3 = on and curTh.White or curTh.KnobOff
+		if instant then
+			track.BackgroundColor3 = tGoal
+			knob.Position = kGoal
+		else
+			TweenService:Create(track, TweenInfo.new(0.14), { BackgroundColor3 = tGoal }):Play()
+			TweenService:Create(knob, TweenInfo.new(0.14), { Position = kGoal }):Play()
+		end
+	end
+
+	refresh(true)
+	table.insert(State.SyncCallbacks, function() refresh(true) end)
+
+	track.MouseButton1Click:Connect(function()
+		setter(not getter())
+		refresh(false)
+	end)
+
+	table.insert(State.AllRows, { Row = row, Text = labelText, IsThemeMenu = false })
+end
+
+local function addSliderRow(parent, labelText, minVal, maxVal, order, getter, setter)
+	local th = getTheme()
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 44)
+	row.LayoutOrder = order
+	row.BackgroundColor3 = th.RowBg
+	row.Parent = parent
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(0.65, 0, 0, 18)
+	lbl.Position = UDim2.new(0, 12, 0, 3)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = labelText
+	lbl.TextColor3 = th.White
+	lbl.Font = Enum.Font.GothamSemibold
+	lbl.TextSize = 11
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.Parent = row
+
+	local valLbl = Instance.new("TextLabel")
+	valLbl.Size = UDim2.new(0.28, 0, 0, 18)
+	valLbl.Position = UDim2.new(0.7, 0, 0, 3)
+	valLbl.BackgroundTransparency = 1
+	valLbl.Text = tostring(getter())
+	valLbl.TextColor3 = th.Accent
+	valLbl.Font = Enum.Font.GothamBold
+	valLbl.TextSize = 11
+	valLbl.TextXAlignment = Enum.TextXAlignment.Right
+	valLbl.Parent = row
+
+	local barBg = Instance.new("TextButton")
+	barBg.Size = UDim2.new(1, -24, 0, 7)
+	barBg.Position = UDim2.new(0, 12, 0, 27)
+	barBg.BackgroundColor3 = th.TrackOff
+	barBg.Text = ""
+	barBg.AutoButtonColor = false
+	barBg.Parent = row
+	Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.new(0, 0, 1, 0)
+	fill.BackgroundColor3 = th.Accent
+	fill.BorderSizePixel = 0
+	fill.Parent = barBg
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+	local function syncSlider()
+		local curTh = getTheme()
+		local v = math.clamp(getter(), minVal, maxVal)
+		local alpha = (v - minVal) / math.max(1, (maxVal - minVal))
+		row.BackgroundColor3 = curTh.RowBg
+		barBg.BackgroundColor3 = curTh.TrackOff
+		fill.BackgroundColor3 = curTh.Accent
+		valLbl.TextColor3 = curTh.Accent
+		valLbl.Text = tostring(math.floor(v))
+		fill.Size = UDim2.new(alpha, 0, 1, 0)
+	end
+
+	syncSlider()
+	table.insert(State.SyncCallbacks, syncSlider)
+
+	local sliding = false
+	local function updateFromX(xPos)
+		local rel = math.clamp((xPos - barBg.AbsolutePosition.X) / math.max(1, barBg.AbsoluteSize.X), 0, 1)
+		local newVal = math.floor(minVal + rel * (maxVal - minVal))
+		setter(newVal)
+		syncSlider()
+	end
+
+	barBg.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			sliding = true
+			updateFromX(input.Position.X)
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					sliding = false
+				end
+			end)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			updateFromX(input.Position.X)
+		end
+	end)
+
+	table.insert(State.AllRows, { Row = row, Text = labelText, IsThemeMenu = false })
+end
+
+local function addActionButton(parent, labelText, order, onClick)
+	local th = getTheme()
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, 0, 0, 34)
+	btn.LayoutOrder = order
+	btn.BackgroundColor3 = th.RowBg
+	btn.TextColor3 = th.White
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 11
+	btn.Text = labelText
+	btn.AutoButtonColor = false
+	btn.Parent = parent
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+	local stroke = Instance.new("UIStroke", btn)
+	stroke.Color = th.Border
+	stroke.Thickness = 1
+
+	table.insert(State.SyncCallbacks, function()
+		local curTh = getTheme()
+		btn.BackgroundColor3 = curTh.RowBg
+		stroke.Color = curTh.Border
+	end)
+
+	btn.MouseButton1Click:Connect(onClick)
+	table.insert(State.AllRows, { Row = btn, Text = labelText, IsThemeMenu = false })
+end
+
+-- إنشاء التبويبات الأربع
+local BombTab = createTab("القنبلة", "💣", 1)
+local MoveTab = createTab("الحركة", "⚡", 2)
+local VisionTab = createTab("الرؤية", "👁", 3)
+local SettingsTab = createTab("الإعدادات", "⚙", 4)
+
+-- 1. تبويب القنبلة
+addToggleRow(BombTab, "هروب تلقائي من القنبلة", 1, function() return Config.AutoEscape end, function(v) Config.AutoEscape = v end)
+addSliderRow(BombTab, "مسافة الهروب (Studs)", 10, 80, 2, function() return Config.EscapeDistance end, function(v) Config.EscapeDistance = v end)
+addToggleRow(BombTab, "تمرير القنبلة لأقرب لاعب", 3, function() return Config.PassToNearest end, function(v) Config.PassToNearest = v end)
+addToggleRow(BombTab, "إخراج القنبلة تلقائياً في يدك", 4, function() return Config.AutoEquipBomb end, function(v) Config.AutoEquipBomb = v end)
+addActionButton(BombTab, "انتقال سريع إلى حامل القنبلة", 5, teleportToBombCarrier)
+addActionButton(BombTab, "حفظ نقطة أمان (Save Safe Spot)", 6, saveSafeSpot)
+
+-- 2. تبويب الحركة
+addToggleRow(MoveTab, "تفعيل السرعة الخارقة", 1, function() return Config.SuperSpeed end, function(v) Config.SuperSpeed = v end)
+addSliderRow(MoveTab, "قيمة السرعة (WalkSpeed)", 16, 120, 2, function() return Config.WalkSpeed end, function(v) Config.WalkSpeed = v end)
+addToggleRow(MoveTab, "تفعيل قوة القفز", 3, function() return Config.HighJump end, function(v) Config.HighJump = v end)
+addSliderRow(MoveTab, "ارتفاع القفز (JumpPower)", 50, 200, 4, function() return Config.JumpPower end, function(v) Config.JumpPower = v end)
+addToggleRow(MoveTab, "اختراق الجدران (Noclip)", 5, function() return Config.Noclip end, function(v) Config.Noclip = v end)
+addToggleRow(MoveTab, "القفز اللانهائي (Infinite Jump)", 6, function() return Config.InfiniteJump end, function(v) Config.InfiniteJump = v end)
+
+-- 3. تبويب الرؤية
+addToggleRow(VisionTab, "تحديد حامل القنبلة (Bomb ESP)", 1, function() return Config.BombESP end, function(v) Config.BombESP = v; updateESP() end)
+addToggleRow(VisionTab, "كشف جميع اللاعبين (Player ESP)", 2, function() return Config.PlayerESP end, function(v) Config.PlayerESP = v; updateESP() end)
+
+-- 4. تبويب الإعدادات
+do
+	local th = getTheme()
+	local dropRow = Instance.new("Frame")
+	dropRow.Size = UDim2.new(1, 0, 0, 40)
+	dropRow.LayoutOrder = 1
+	dropRow.BackgroundColor3 = th.RowBg
+	dropRow.Parent = SettingsTab
+	Instance.new("UICorner", dropRow).CornerRadius = UDim.new(0, 6)
+
+	local dropBtn = Instance.new("TextButton")
+	dropBtn.Size = UDim2.new(1, -24, 1, 0)
+	dropBtn.Position = UDim2.new(0, 12, 0, 0)
+	dropBtn.BackgroundTransparency = 1
+	dropBtn.TextColor3 = th.White
+	dropBtn.Font = Enum.Font.GothamSemibold
+	dropBtn.TextSize = 11
+	dropBtn.TextXAlignment = Enum.TextXAlignment.Left
+	dropBtn.Text = "مظهر الواجهة : اختر ▾"
+	dropBtn.Parent = dropRow
+
+	local menuHolder = Instance.new("Frame")
+	menuHolder.Size = UDim2.new(1, 0, 0, 96)
+	menuHolder.LayoutOrder = 2
+	menuHolder.BackgroundColor3 = th.SidebarBg
+	menuHolder.Visible = false
+	menuHolder.Parent = SettingsTab
+	Instance.new("UICorner", menuHolder).CornerRadius = UDim.new(0, 6)
+	State.ThemeMenuHolder = menuHolder
+
+	local mLayout = Instance.new("UIListLayout", menuHolder)
+	mLayout.Padding = UDim.new(0, 4)
+	local mPad = Instance.new("UIPadding", menuHolder)
+	mPad.PaddingTop = UDim.new(0, 4)
+	mPad.PaddingLeft = UDim.new(0, 6)
+	mPad.PaddingRight = UDim.new(0, 6)
+
+	local function applyTheme()
+		local curTh = getTheme()
+		MainWindow.BackgroundColor3 = curTh.WindowBg
+		winStroke.Color = curTh.Accent
+		TopBar.BackgroundColor3 = curTh.SidebarBg
+		Sidebar.BackgroundColor3 = curTh.SidebarBg
+		TitleLbl.TextColor3 = curTh.Accent
+		SearchBox.BackgroundColor3 = curTh.RowBg
+		MinBtn.BackgroundColor3 = curTh.RowBg
+		CloseBtn.BackgroundColor3 = curTh.Accent
+		AXToggleBtn.BackgroundColor3 = curTh.Accent
+		dropRow.BackgroundColor3 = curTh.RowBg
+		menuHolder.BackgroundColor3 = curTh.SidebarBg
+
+		for name, b in pairs(tabButtons) do
+			b.BackgroundColor3 = (name == activeTab) and curTh.Accent or curTh.RowBg
+		end
+		for _, fn in ipairs(State.SyncCallbacks) do
+			fn()
+		end
+		updateESP()
+	end
+
+	for themeName in pairs(Themes) do
+		local opt = Instance.new("TextButton")
+		opt.Size = UDim2.new(1, 0, 0, 26)
+		opt.BackgroundColor3 = th.RowBg
+		opt.TextColor3 = th.White
+		opt.Font = Enum.Font.GothamSemibold
+		opt.TextSize = 11
+		opt.Text = themeName
+		opt.Parent = menuHolder
+		Instance.new("UICorner", opt).CornerRadius = UDim.new(0, 5)
+
+		opt.MouseButton1Click:Connect(function()
+			Config.ThemeName = themeName
+			dropBtn.Text = "مظهر الواجهة : " .. themeName .. " ▾"
+			menuHolder.Visible = false
+			applyTheme()
+		end)
+	end
+
+	dropBtn.MouseButton1Click:Connect(function()
+		menuHolder.Visible = not menuHolder.Visible
+	end)
+
+	table.insert(State.AllRows, { Row = dropRow, Text = "مظهر الواجهة", IsThemeMenu = false })
+	table.insert(State.AllRows, { Row = menuHolder, Text = "مظهر الواجهة", IsThemeMenu = true })
+
+	addToggleRow(SettingsTab, "منع الطرد عند الخمول (Anti-AFK)", 3, function() return Config.AntiAFK end, function(v) Config.AntiAFK = v end)
+
+	addActionButton(SettingsTab, "إعادة ضبط جميع الإعدادات", 4, function()
+		for k, v in pairs(Defaults) do
+			Config[k] = v
+		end
+		dropBtn.Text = "مظهر الواجهة : اختر ▾"
+		menuHolder.Visible = false
+		setPageVisibility(true)
+		applyTheme()
+		pushBombAlert("تمت إعادة ضبط جميع الإعدادات")
+	end)
+end
+
+-- البحث السريع
+SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+	local q = string.lower(SearchBox.Text)
+	if q == "" then
+		for _, p in pairs(tabPages) do
+			p.Visible = false
+		end
+		if activeTab and tabPages[activeTab] then
+			tabPages[activeTab].Visible = true
+		end
+		for _, item in ipairs(State.AllRows) do
+			if not item.IsThemeMenu then
+				item.Row.Visible = true
+			end
+		end
+		return
+	end
+
+	for _, p in pairs(tabPages) do
+		p.Visible = true
+	end
+	for _, item in ipairs(State.AllRows) do
+		if not item.IsThemeMenu then
+			item.Row.Visible = string.find(string.lower(item.Text), q, 1, true) ~= nil
+		end
+	end
+end)
+
+-- تفعيل تبويب الرؤية افتراضياً
+activeTab = "الرؤية"
+for n, p in pairs(tabPages) do
+	p.Visible = (n == "الرؤية")
+end
+for n, b in pairs(tabButtons) do
+	b.BackgroundColor3 = (n == "الرؤية") and getTheme().Accent or getTheme().RowBg
+end
+
+-- ==========================================
+-- 6. MAIN LOOP
+-- ==========================================
+local scanTimer = 0
+RunService.Heartbeat:Connect(function(dt)
+	scanTimer += dt
+	if scanTimer >= 0.2 then
+		scanTimer = 0
+		updateESP()
+	end
+	stepMovementAndBomb()
+end)
